@@ -61,7 +61,7 @@ def optimal_portfolio(returns):
     returns = np.asmatrix(returns)
 
     N = 100
-    mus = [10**(5.0 * t/N - 1.0) for t in range(N)]
+    qs = [10**(-5.0 * t/N + 1.0) for t in range(N)]
 
     # Convert to cvxopt matrices
     S = opt.matrix(np.cov(returns))
@@ -73,24 +73,24 @@ def optimal_portfolio(returns):
     # Create constraint matrices
     # -- documentation at http://cvxopt.org/userguide/coneprog.html#quadratic-programming
     G = -opt.matrix(np.eye(n)) # negative nxn id
-    h = opt.matrix(0.0, (n, 1))
-    A = opt.matrix(1.0, (1, n))
-    b = opt.matrix(1.0)
+    h = opt.matrix(0.0, (n, 1)) # n x 1 zero vector
+    A = opt.matrix(1.0, (1, n)) # 1 x n 1-vector
+    b = opt.matrix(1.0) # [1.0]
 
     ## Calculate efficient frontier weights using quadratic programming
     ## https://en.wikipedia.org/wiki/Quadratic_programming
-    # Minimizes (1/2) w^T * (mu * S) * w - pbar^T * w for weights w
+    # Minimizes (1/2) w^T * S * w - q pbar^T * w for weights w
     # subject to the constrains:
     # G * w <= h (component-wise) -- positive weights
     # and A*x = b -- Sum of weights == 1
     # where S is the covariance matrix,
     # pbar are the mean returns,
-    # mu is one of N sample means -- implying parametric solution
-    portfolios = [solvers.qp(mu*S, -pbar, G, h, A, b)['x'] for mu in mus]
+    # q is a measure of risk tolerance
+    portfolios = [solvers.qp(S, -q*pbar, G, h, A, b)['x'] for q in qs]
 
     ## Could replace above with Lagrange multiplier (or convex hull)
 
-    # Calculate risks and returns for frontier
+    # Calculate risks and mean returns for frontier
     returns = [blas.dot(pbar, x) for x in portfolios]
     risks = [np.sqrt(blas.dot(x, S * x)) for x in portfolios]
 
