@@ -1,12 +1,28 @@
 import numpy as np
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import cvxopt as opt
 from cvxopt import blas, solvers
 import random
+import pandas as pd
+from zipline.utils.factory import load_bars_from_yahoo
+from zipline import TradingAlgorithm
+from zipline.api import (history,
+                         set_slippage,
+                         slippage,
+                         set_commission,
+                         commission,
+                         order_target_percent)
+from zipline.api import add_history
+end = pd.Timestamp.utcnow()
+start = end - 2500 * pd.tseries.offsets.BDay()
+
+data = load_bars_from_yahoo(stocks=['IBM', 'GLD', 'XOM', 'AAPL',
+                                    'MSFT', 'GOOG', 'SHY'],
+                            start=start, end=end)
 
 seed = random.SystemRandom().randint(1, 999999)
 
-np.random.seed(seed)
+np.random.seed(123)
 
 # Silence progress in cvxopt solver
 solvers.options['show_progress'] = False
@@ -82,7 +98,7 @@ def optimal_portfolio(returns):
     # Minimizes (1/2) w^T * S * w - q pbar^T * w for weights w
     # subject to the constrains:
     # G * w <= h (component-wise) -- positive weights
-    # and A*x = b -- Sum of weights == 1
+    # and A*w = b -- Sum of weights == 1
     # where S is the covariance matrix,
     # pbar are the mean returns,
     # q is a measure of risk tolerance
@@ -103,18 +119,83 @@ def optimal_portfolio(returns):
 
     return np.asarray(wt), returns, risks
 
+def initialize(context):
+    '''
+    Called once at the very beginning of a backtest (and live trading).
+    Use this method to set up any bookkeeping variables.
 
-return_vec = np.random.randn(NUM_ASSETS, NUM_OBSERVATIONS)
-means, stds = np.column_stack([random_portfolio(return_vec) for _ in xrange(NUM_PORTFOLIOS)])
-weights, returns, risks = optimal_portfolio(return_vec)
+    The context object is passed to all the other methods in your algorithm.
 
-print weights
-print sum(weights)
-print weights*CAPITAL
+    Parameters
 
-plt.plot(stds, means, 'o', markersize=5)
-plt.plot(risks, returns, 'y-o')
-plt.xlabel('std')
-plt.ylabel('mean')
-plt.title('Mean and standard deviation of returns of randomly generated portfolios')
-plt.show()
+    context: An initialized and empty Python dictionary that has been
+             augmented so that properties can be accessed using dot
+             notation as well as the traditional bracket notation.
+
+    Returns None
+    '''
+    # Register history container to keep a window of the last 100 prices.
+    add_history(100, '1d', 'price')
+    # Turn off the slippage model
+    set_slippage(slippage.FixedSlippage(spread=0.0))
+    # Set the commission model (Interactive Brokers Commission)
+    set_commission(commission.PerShare(cost=0.01, min_trade_cost=1.0))
+    context.tick = 0
+
+def handle_data(context, data):
+    '''
+    Called when a market event occurs for any of the algorithm's
+    securities.
+
+    Parameters
+
+    data: A dictionary keyed by security id containing the current
+          state of the securities in the algo's universe.
+
+    context: The same context object from the initialize function.
+             Stores the up to date portfolio as well as any state
+             variables defined.
+
+    Returns None
+    '''
+    # Allow history to accumulate 100 days of prices before trading
+    # and rebalance every day thereafter.
+    context.tick += 1
+    if context.tick < 100:
+        return
+    # Get rolling window of past prices and compute returns
+    prices = history(100, '1d', 'price').dropna()
+    returns = prices.pct_change().dropna()
+    try:
+        # Perform Markowitz-style portfolio optimization
+        weights, _, _ = optimal_portfolio(returns.T)
+        # Rebalance portfolio accordingly
+        for stock, weight in zip(prices.columns, weights):
+            order_target_percent(stock, weight)
+    except ValueError:
+        # Sometimes this error is thrown
+        # ValueError: Rank(A) < p or Rank([P; A; G]) < n
+        pass
+
+# Instantinate algorithm
+algo = TradingAlgorithm(initialize=initialize,
+                        handle_data=handle_data)
+
+# Run algorithm
+results = algo.run(data)
+results.portfolio_value.plot()
+
+# return_vec = np.random.randn(NUM_ASSETS, NUM_OBSERVATIONS)
+# means, stds = np.column_stack([random_portfolio(return_vec) for _ in xrange(NUM_PORTFOLIOS)])
+# weights, returns, risks = optimal_portfolio(return_vec)
+
+# print weights
+# print sum(weights)
+# print weights*CAPITAL
+
+# plt.plot(stds, means, 'o', markersize=5)
+# plt.plot(risks, returns, 'y-o')
+# plt.xlabel('std')
+# plt.ylabel('mean')
+# plt.title('Mean and standard deviation of returns of randomly generated portfolios')
+# plt.show()
